@@ -1,5 +1,5 @@
 [build]
-  command = "cd vault-ui && npm install && npm run build"
+  command = "npm install && cd vault-ui && npm install && npm run build"
   publish = "vault-ui/dist"
 
 [functions]
