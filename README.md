@@ -53,10 +53,10 @@ Zero-knowledge is the core design:
 
 ## 🧪 Testing Accounts
 
-| Username | Password    | Role  |
-|----------|-------------|-------|
-| `admin`  | `Admin@123` | Admin |
-| `alice`  | `Alice@123` | User  |
+| Username                | Password    | Role  |
+|-------------------------|-------------|-------|
+| `bildadworks@gmail.com` | `Admin@123` | Admin |
+| `alice@example.com`     | `Alice@123` | User  |
 
 ---
 
