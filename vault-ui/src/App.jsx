@@ -163,9 +163,15 @@ function LoginForm({ onLogin }) {
 
       if (verifyError) throw verifyError;
 
+      // Sign in natively to immediately get a valid session JWT token
+      const { data: si, error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password: newPassword
+      });
+      if (signInError) throw signInError;
+
       setInfo('Password successfully updated via Custom Flow! Logging you in...');
-      onLogin(email, newPassword, 'unknown-id'); // We bypass getting ID since login forces refresh
-      window.location.reload(); // Refresh to securely establish new session
+      onLogin(si.user.email, newPassword, si.user.id);
     } catch (err) { setError(err.message); }
     finally { setLoading(false); }
   };
