@@ -6,185 +6,81 @@ import {
 } from 'lucide-react';
 import axios from 'axios';
 import { encryptPassword, decryptPassword, hashPassword } from './utils/crypto';
+import { supabase } from './lib/supabase';
 
 // ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-const VAULT_URL = import.meta.env.VITE_VAULT_URL || '/vault-api';
-const EMAIL_URL = import.meta.env.VITE_EMAIL_URL || '/email-api';
-const VAULT_TOKEN = 'admin-master-token';
-const REGISTRY_PATH = `${VAULT_URL}/v1/secret/data/auth/registry`;
-const RESET_TOKENS_PATH = `${VAULT_URL}/v1/secret/data/auth/reset-tokens`;
-
-// ---------------------------------------------------------------------------
-// Test accounts – seeded once on startup
-// ---------------------------------------------------------------------------
-const TEST_ACCOUNTS = [
-  { username: 'admin', password: 'Admin@123', email: 'admin@vault.test', role: 'admin' },
-  { username: 'alice', password: 'Alice@123', email: 'alice@vault.test', role: 'user' },
-  { username: 'bob', password: 'Bob@123', email: 'bob@vault.test', role: 'user' },
-];
-
-async function seedTestAccounts() {
-  try {
-    await axios.get(REGISTRY_PATH, { headers: { 'X-Vault-Token': VAULT_TOKEN } });
-  } catch (err) {
-    if (err.response?.status === 404) {
-      const registry = {};
-      for (const acct of TEST_ACCOUNTS) {
-        registry[acct.username] = {
-          role: acct.role,
-          email: acct.email,
-          authHash: await hashPassword(acct.password),
-        };
-      }
-      await axios.post(REGISTRY_PATH, { data: registry }, { headers: { 'X-Vault-Token': VAULT_TOKEN } });
-      console.info('[RBAC] Test accounts seeded.');
-    }
-  }
-}
-
-function generateCode() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
-// ---------------------------------------------------------------------------
-// Helper: fetch registry
-// ---------------------------------------------------------------------------
-async function fetchRegistry() {
-  try {
-    const res = await axios.get(REGISTRY_PATH, { headers: { 'X-Vault-Token': VAULT_TOKEN } });
-    return res.data?.data?.data || {};
-  } catch (err) {
-    if (err.response?.status === 404) return {};
-    throw err;
-  }
-}
-
-async function saveRegistry(registry) {
-  await axios.post(REGISTRY_PATH, { data: registry }, { headers: { 'X-Vault-Token': VAULT_TOKEN } });
-}
-
-async function fetchResetTokens() {
-  try {
-    const res = await axios.get(RESET_TOKENS_PATH, { headers: { 'X-Vault-Token': VAULT_TOKEN } });
-    return res.data?.data?.data || {};
-  } catch (err) {
-    if (err.response?.status === 404) return {};
-    throw err;
-  }
-}
-
-async function saveResetTokens(tokens) {
-  await axios.post(RESET_TOKENS_PATH, { data: tokens }, { headers: { 'X-Vault-Token': VAULT_TOKEN } });
-}
-
-// ---------------------------------------------------------------------------
-// LoginForm — with Forgot Password self-reset flow
+// LoginForm — with Supabase Auth
 // ---------------------------------------------------------------------------
 function LoginForm({ onLogin }) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Forgot-password flow state: null | 'request' | 'verify'
+  // Forgot-password flow
   const [resetStep, setResetStep] = useState(null);
-  const [resetCode, setResetCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [showNewPw, setShowNewPw] = useState(false);
 
   const clearMessages = () => { setError(''); setInfo(''); };
 
-  // ---- Normal login -------------------------------------------------------
-  const handleLogin = async (e) => {
+  const handleAuth = async (e) => {
     e.preventDefault();
     clearMessages();
-    if (!username || !password || !email) return;
+    if (!email || !password) return;
     setLoading(true);
-    try {
-      const authHash = await hashPassword(password);
-      const registry = await fetchRegistry();
 
-      if (registry[username]) {
-        if (registry[username].authHash !== authHash) {
-          setError('Invalid credentials. Please check your username and password.');
-          return;
+    try {
+      // 1. Try to login
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (signInError) {
+        // 2. If login fails because user doesn't exist, try to sign up
+        if (signInError.message.includes("Invalid login credentials")) {
+          const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+            email,
+            password,
+          });
+
+          if (signUpError) throw signUpError;
+
+          if (signUpData.user && signUpData.session) {
+            setInfo("Account created! Logging you in...");
+            onLogin(signUpData.user.email, password, signUpData.user.id);
+          } else {
+            setInfo("Check your email for a confirmation link!");
+          }
+        } else {
+          throw signInError;
         }
-        onLogin(username, password, email, registry[username].role || 'user');
       } else {
-        // New user — register as user
-        registry[username] = { role: 'user', email, authHash };
-        await saveRegistry(registry);
-        onLogin(username, password, email, 'user');
+        onLogin(signInData.user.email, password, signInData.user.id);
       }
-    } catch {
-      setError('Cannot connect to Vault. Is the Docker container running?');
+    } catch (err) {
+      setError(err.message || 'Authentication failed. Please try again.');
     } finally { setLoading(false); }
   };
 
-  // ---- Step 1: request reset code -----------------------------------------
   const handleRequestReset = async (e) => {
     e.preventDefault();
     clearMessages();
-    if (!username || !email) return;
+    if (!email) return;
     setLoading(true);
     try {
-      const registry = await fetchRegistry();
-      const user = registry[username];
-      if (!user) { setError('Username not found.'); return; }
-      if (user.email !== email) { setError('Email does not match the one registered for this account.'); return; }
-
-      const code = generateCode();
-      const expiry = Date.now() + 15 * 60 * 1000;
-      const tokens = await fetchResetTokens();
-      tokens[username] = { code, expiry };
-      await saveResetTokens(tokens);
-
-      await axios.post(`${EMAIL_URL}/send-reset`, { to: email, username, code, type: 'self' });
-      setInfo(`A 6-digit reset code has been sent to ${email}. Check your inbox.`);
-      setResetStep('verify');
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin,
+      });
+      if (error) throw error;
+      setInfo(`Password reset link sent to ${email}. Check your inbox.`);
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to send reset code. Please try again.');
+      setError(err.message);
     } finally { setLoading(false); }
   };
 
-  // ---- Step 2: verify code + set new password -----------------------------
-  const handleVerifyReset = async (e) => {
-    e.preventDefault();
-    clearMessages();
-    if (!resetCode || !newPassword) return;
-    setLoading(true);
-    try {
-      const tokens = await fetchResetTokens();
-      const token = tokens[username];
-      if (!token) { setError('No reset code found. Please request a new one.'); return; }
-      if (token.code !== resetCode) { setError('Invalid reset code.'); return; }
-      if (Date.now() > token.expiry) { setError('Reset code has expired. Please request a new one.'); return; }
-
-      // Update password in registry
-      const authHash = await hashPassword(newPassword);
-      const registry = await fetchRegistry();
-      registry[username] = { ...registry[username], authHash };
-      await saveRegistry(registry);
-
-      // Clear the used token
-      delete tokens[username];
-      await saveResetTokens(tokens);
-
-      setInfo('Password reset successfully! You can now log in with your new password.');
-      setResetStep(null);
-      setResetCode('');
-      setNewPassword('');
-    } catch {
-      setError('Something went wrong. Please try again.');
-    } finally { setLoading(false); }
-  };
-
-  // ---- Render -------------------------------------------------------------
   return (
     <div>
       {error && (
@@ -198,31 +94,22 @@ function LoginForm({ onLogin }) {
         </div>
       )}
 
-      {/* ---- Forgot password: Step 1 ---- */}
-      {resetStep === 'request' && (
+      {resetStep === 'request' ? (
         <form onSubmit={handleRequestReset}>
           <h3 style={{ textAlign: 'center', marginTop: 0 }}>Reset Password</h3>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
-            Enter your username and registered email to receive a reset code.
+            Enter your email to receive a reset link.
           </p>
           <div className="form-group">
-            <label>Username</label>
-            <div style={{ position: 'relative' }}>
-              <Users size={20} style={{ position: 'absolute', top: '12px', left: '12px', color: 'var(--text-secondary)' }} />
-              <input type="text" placeholder="johndoe" value={username}
-                onChange={e => setUsername(e.target.value)} style={{ paddingLeft: '2.5rem' }} required />
-            </div>
-          </div>
-          <div className="form-group">
-            <label>Registered Email</label>
+            <label>Email Address</label>
             <div style={{ position: 'relative' }}>
               <Mail size={20} style={{ position: 'absolute', top: '12px', left: '12px', color: 'var(--text-secondary)' }} />
               <input type="email" placeholder="you@example.com" value={email}
                 onChange={e => setEmail(e.target.value)} style={{ paddingLeft: '2.5rem' }} required />
             </div>
           </div>
-          <button type="submit" className="btn" disabled={loading || !username || !email}>
-            <Mail size={16} /> {loading ? 'Sending...' : 'Send Reset Code'}
+          <button type="submit" className="btn" disabled={loading || !email}>
+            <Mail size={16} /> {loading ? 'Sending...' : 'Send Reset Link'}
           </button>
           <button type="button" className="btn"
             style={{ marginTop: '0.5rem', backgroundColor: 'transparent', border: '1px solid var(--border-color)' }}
@@ -230,55 +117,10 @@ function LoginForm({ onLogin }) {
             ← Back to Login
           </button>
         </form>
-      )}
-
-      {/* ---- Forgot password: Step 2 ---- */}
-      {resetStep === 'verify' && (
-        <form onSubmit={handleVerifyReset}>
-          <h3 style={{ textAlign: 'center', marginTop: 0 }}>Enter Reset Code</h3>
+      ) : (
+        <form onSubmit={handleAuth}>
           <div className="form-group">
-            <label>6-Digit Reset Code</label>
-            <input type="text" placeholder="123456" maxLength={6} value={resetCode}
-              onChange={e => setResetCode(e.target.value.replace(/\D/g, ''))} required
-              style={{ textAlign: 'center', letterSpacing: '0.5rem', fontSize: '1.2rem' }} />
-          </div>
-          <div className="form-group">
-            <label>New Password / Master Key</label>
-            <div style={{ position: 'relative' }}>
-              <Key size={20} style={{ position: 'absolute', top: '12px', left: '12px', color: 'var(--text-secondary)' }} />
-              <input type={showNewPw ? 'text' : 'password'} placeholder="New secret password"
-                value={newPassword} onChange={e => setNewPassword(e.target.value)}
-                style={{ paddingLeft: '2.5rem', paddingRight: '2.5rem' }} required />
-              <button type="button" onClick={() => setShowNewPw(p => !p)}
-                style={{ position: 'absolute', top: '12px', right: '10px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-                {showNewPw ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-          </div>
-          <button type="submit" className="btn" disabled={loading || !resetCode || !newPassword}>
-            <RefreshCw size={16} /> {loading ? 'Resetting...' : 'Reset Password'}
-          </button>
-          <button type="button" className="btn"
-            style={{ marginTop: '0.5rem', backgroundColor: 'transparent', border: '1px solid var(--border-color)' }}
-            onClick={() => setResetStep('request')}>
-            ← Resend Code
-          </button>
-        </form>
-      )}
-
-      {/* ---- Normal login ---- */}
-      {!resetStep && (
-        <form onSubmit={handleLogin}>
-          <div className="form-group">
-            <label htmlFor="username">Username</label>
-            <div style={{ position: 'relative' }}>
-              <Users size={20} style={{ position: 'absolute', top: '12px', left: '12px', color: 'var(--text-secondary)' }} />
-              <input id="username" type="text" placeholder="johndoe" value={username}
-                onChange={e => setUsername(e.target.value)} style={{ paddingLeft: '2.5rem' }} required />
-            </div>
-          </div>
-          <div className="form-group">
-            <label htmlFor="email">Recovery Email</label>
+            <label htmlFor="email">Email Address</label>
             <div style={{ position: 'relative' }}>
               <Mail size={20} style={{ position: 'absolute', top: '12px', left: '12px', color: 'var(--text-secondary)' }} />
               <input id="email" type="email" placeholder="you@example.com" value={email}
@@ -286,11 +128,11 @@ function LoginForm({ onLogin }) {
             </div>
           </div>
           <div className="form-group">
-            <label htmlFor="password">Password / Master Key</label>
+            <label htmlFor="password">Master Password / Encryption Key</label>
             <div style={{ position: 'relative' }}>
               <Key size={20} style={{ position: 'absolute', top: '12px', left: '12px', color: 'var(--text-secondary)' }} />
               <input id="password" type={showPw ? 'text' : 'password'}
-                placeholder="Your secret password &amp; encryption key"
+                placeholder="Secret password & encryption key"
                 value={password} onChange={e => setPassword(e.target.value)}
                 style={{ paddingLeft: '2.5rem', paddingRight: '2.5rem' }} required />
               <button type="button" onClick={() => setShowPw(p => !p)}
@@ -298,12 +140,9 @@ function LoginForm({ onLogin }) {
                 {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-              This is also your encryption key — it is never stored.
-            </p>
           </div>
-          <button type="submit" className="btn" disabled={loading || !username || !password || !email}>
-            <Unlock size={20} /> {loading ? 'Verifying...' : 'Login / Create Account'}
+          <button type="submit" className="btn" disabled={loading || !email || !password}>
+            <Unlock size={20} /> {loading ? 'Authenticating...' : 'Login / Signup'}
           </button>
           <button type="button"
             onClick={() => { setResetStep('request'); clearMessages(); }}
@@ -319,6 +158,8 @@ function LoginForm({ onLogin }) {
   );
 }
 
+
+
 // ---------------------------------------------------------------------------
 // UserDashboard
 // ---------------------------------------------------------------------------
@@ -332,29 +173,51 @@ function UserDashboard({ username, masterKey, onLogout }) {
   const [editingEntry, setEditingEntry] = useState(null);
 
   const fetchUserVault = async () => {
-    setLoading(true);
+    setLoading(true); setError('');
     try {
-      const res = await axios.get(`${VAULT_URL}/v1/secret/data/users/${username}`,
-        { headers: { 'X-Vault-Token': VAULT_TOKEN } });
-      const encryptedMap = res.data?.data?.data?.passwords || {};
-      const decrypted = {};
-      Object.keys(encryptedMap).forEach(app => {
-        const d = decryptPassword(encryptedMap[app], masterKey);
-        if (d) decrypted[app] = d;
-      });
-      setSavedPasswords(decrypted);
+      const { data, error: fetchError } = await supabase
+        .from('user_vaults')
+        .select('encrypted_data')
+        .single();
+
+      if (fetchError) {
+        if (fetchError.code === 'PGRST116') { // No data found
+          setSavedPasswords({});
+        } else {
+          throw fetchError;
+        }
+      } else {
+        const encryptedMap = data.encrypted_data || {};
+        const decrypted = {};
+        Object.keys(encryptedMap).forEach(app => {
+          const d = decryptPassword(encryptedMap[app], masterKey);
+          if (d) decrypted[app] = d;
+        });
+        setSavedPasswords(decrypted);
+      }
     } catch (err) {
-      if (err.response?.status !== 404) setError(`Failed to fetch vault: ${err.message}`);
+      setError(`Failed to fetch vault: ${err.message}`);
     } finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchUserVault(); }, [username]);
+  useEffect(() => { if (username) fetchUserVault(); }, [username]);
 
   const saveToVault = async (passwords) => {
     const enc = {};
     Object.keys(passwords).forEach(app => { enc[app] = encryptPassword(passwords[app], masterKey); });
-    await axios.post(`${VAULT_URL}/v1/secret/data/users/${username}`,
-      { data: { passwords: enc } }, { headers: { 'X-Vault-Token': VAULT_TOKEN } });
+
+    // Get user id from session
+    const { data: { user } } = await supabase.auth.getUser();
+
+    const { error: upsertError } = await supabase
+      .from('user_vaults')
+      .upsert({
+        user_id: user.id,
+        encrypted_data: enc,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'user_id' });
+
+    if (upsertError) throw upsertError;
   };
 
   const toggleVisibility = (app) => setVisiblePasswords(p => ({ ...p, [app]: !p[app] }));
@@ -614,30 +477,51 @@ function AdminPanel({ onExit }) {
 function MainApp() {
   const [currentUser, setCurrentUser] = useState(() => sessionStorage.getItem('vault_user'));
   const [masterKey, setMasterKey] = useState(() => sessionStorage.getItem('vault_key'));
-  const [email, setEmail] = useState(() => sessionStorage.getItem('vault_email'));
+  const [userId, setUserId] = useState(() => sessionStorage.getItem('vault_uid'));
   const [role, setRole] = useState(() => sessionStorage.getItem('vault_role') || 'user');
   const [showAdmin, setShowAdmin] = useState(false);
   const [theme, setTheme] = useState(() => localStorage.getItem('vault_theme') || 'dark');
-  const [seeded, setSeeded] = useState(false);
-
-  useEffect(() => { if (!seeded) seedTestAccounts().finally(() => setSeeded(true)); }, []);
 
   useEffect(() => {
     document.body.classList.toggle('light', theme === 'light');
     localStorage.setItem('vault_theme', theme);
   }, [theme]);
 
-  const handleLogin = (user, key, em, userRole) => {
-    setCurrentUser(user); setMasterKey(key); setEmail(em); setRole(userRole);
-    sessionStorage.setItem('vault_user', user);
+  // Check for active session on load
+  useEffect(() => {
+    const checkSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        setCurrentUser(session.user.email);
+        setUserId(session.user.id);
+        // Admin check: you can hardcode your admin email here for now
+        if (session.user.email === 'admin@vault.test' || session.user.email.startsWith('admin@')) {
+          setRole('admin');
+          sessionStorage.setItem('vault_role', 'admin');
+        }
+      }
+    };
+    checkSession();
+  }, []);
+
+  const handleLogin = (email, key, uid) => {
+    setCurrentUser(email); setMasterKey(key); setUserId(uid);
+    sessionStorage.setItem('vault_user', email);
     sessionStorage.setItem('vault_key', key);
-    sessionStorage.setItem('vault_email', em);
-    sessionStorage.setItem('vault_role', userRole);
+    sessionStorage.setItem('vault_uid', uid);
+
+    if (email === 'admin@vault.test' || email.startsWith('admin@')) {
+      setRole('admin');
+      sessionStorage.setItem('vault_role', 'admin');
+    } else {
+      setRole('user');
+      sessionStorage.setItem('vault_role', 'user');
+    }
   };
 
-  const handleLogout = () => {
-    setCurrentUser(null); setMasterKey(null); setEmail(null);
-    setRole('user'); setShowAdmin(false);
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setCurrentUser(null); setMasterKey(null); setUserId(null); setRole('user');
     sessionStorage.clear();
   };
 
