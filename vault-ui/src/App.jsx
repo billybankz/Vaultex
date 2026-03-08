@@ -797,6 +797,28 @@ function MainApp() {
     setCurrentUser(null); setMasterKey(null); setRole('user'); setShowAdmin(false);
   };
 
+  useEffect(() => {
+    if (!currentUser) return;
+
+    let timeout;
+    const resetTimer = () => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        toast('Logged out due to inactivity.', 'error');
+        handleLogout();
+      }, 15000); // 15 seconds
+    };
+
+    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart'];
+    events.forEach(e => window.addEventListener(e, resetTimer));
+    resetTimer(); // start initially
+
+    return () => {
+      clearTimeout(timeout);
+      events.forEach(e => window.removeEventListener(e, resetTimer));
+    };
+  }, [currentUser, toast]);
+
   const isAdmin = role === 'admin';
   if (!sessionLoaded) return null;
 
