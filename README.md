@@ -1,6 +1,6 @@
 # Vaultex - E2E Encrypted Vault
 
-Vaultex is a secure, zero-knowledge password vault application built with React and HashiCorp Vault. It features client-side encryption, role-based access control, and a dedicated email microservice for password recovery.
+Vaultex is a secure, zero-knowledge password vault built with React and Supabase. It features client-side encryption (AES-GCM), Supabase Auth, and a serverless email function for password recovery.
 
 ## 🚀 Features
 
@@ -11,31 +11,23 @@ Vaultex is a secure, zero-knowledge password vault application built with React 
 - **Email Recovery**: Self-reset and admin-led reset flows integrated with Resend API.
 - **Theme Toggles**: Support for light and dark modes.
 
+## 🚀 Cloud Architecture
+This project is designed to be fully serverless:
+- **Frontend**: Hosted on **Netlify**.
+- **Backend/Auth**: Powered by **Supabase**.
+- **Email Service**: Running as a **Netlify Function**.
+
+## 🛡️ Security Model (Zero-Knowledge)
+- **Encryption**: All data is encrypted in the browser using a key derived from your Master Password.
+- **Privacy**: The encryption key and plaintext data never leave your device.
+- **Storage**: Supabase only stores encrypted blobs that cannot be read by anyone without your Master Password.
+
 ## 🛠️ Tech Stack
 
 - **Frontend**: React, Vite, Lucide-React, Axios, CryptoJS
 - **Backend**: HashiCorp Vault (Docker)
 - **Email Service**: Node.js, Express, Nodemailer (Resend API)
 
-## 📦 Setup & Installation
-
-### 1. Prerequisites
-- Docker & Docker Compose
-- Node.js (v18+)
-
-### 2. Backend (Vault)
-```bash
-docker compose up -d
-```
-
-### 3. Email Service
-1. Navigate to the `email-service` directory.
-2. Create a `.env` file with your Resend API key:
-   ```
-   RESEND_API_KEY=your_key_here
-   PORT=3001
-   ```
-3. Install dependencies and start:
    ```bash
    npm install
    node index.js
