@@ -1,0 +1,23 @@
+[build]
+  command = "cd vault-ui && npm install && npm run build"
+  publish = "vault-ui/dist"
+
+[functions]
+  directory = "netlify/functions"
+
+[[redirects]]
+  from = "/vault-api/*"
+  to = "https://your-koyeb-vault-url.koyeb.app/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/email-api/send-reset"
+  to = "/.netlify/functions/send-reset"
+  status = 200
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+  force = false
