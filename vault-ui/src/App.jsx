@@ -2,14 +2,13 @@ import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import {
   Lock, Unlock, Key, Shield, LogOut, Database, Users, Trash2,
-  Sun, Moon, Eye, EyeOff, Edit2, Check, X, AlertCircle, Mail, RefreshCw
+  Sun, Moon, Eye, EyeOff, Edit2, Check, X, AlertCircle, Mail
 } from 'lucide-react';
-import axios from 'axios';
-import { encryptPassword, decryptPassword, hashPassword } from './utils/crypto';
+import { encryptPassword, decryptPassword } from './utils/crypto';
 import { supabase } from './lib/supabase';
 
 // ---------------------------------------------------------------------------
-// LoginForm — with Supabase Auth
+// LoginForm — Supabase Auth
 // ---------------------------------------------------------------------------
 function LoginForm({ onLogin }) {
   const [email, setEmail] = useState('');
@@ -18,10 +17,7 @@ function LoginForm({ onLogin }) {
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [loading, setLoading] = useState(false);
-
-  // Forgot-password flow
   const [resetStep, setResetStep] = useState(null);
-  const [newPassword, setNewPassword] = useState('');
 
   const clearMessages = () => { setError(''); setInfo(''); };
 
@@ -30,29 +26,18 @@ function LoginForm({ onLogin }) {
     clearMessages();
     if (!email || !password) return;
     setLoading(true);
-
     try {
-      // 1. Try to login
-      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
       if (signInError) {
-        // 2. If login fails because user doesn't exist, try to sign up
-        if (signInError.message.includes("Invalid login credentials")) {
-          const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-            email,
-            password,
-          });
-
+        if (signInError.message.toLowerCase().includes('invalid login credentials')) {
+          // User doesn't exist — try sign up
+          const { data: signUpData, error: signUpError } = await supabase.auth.signUp({ email, password });
           if (signUpError) throw signUpError;
-
           if (signUpData.user && signUpData.session) {
-            setInfo("Account created! Logging you in...");
+            setInfo('Account created! Logging you in…');
             onLogin(signUpData.user.email, password, signUpData.user.id);
           } else {
-            setInfo("Check your email for a confirmation link!");
+            setInfo('Check your email for a confirmation link before logging in.');
           }
         } else {
           throw signInError;
@@ -76,6 +61,7 @@ function LoginForm({ onLogin }) {
       });
       if (error) throw error;
       setInfo(`Password reset link sent to ${email}. Check your inbox.`);
+      setResetStep(null);
     } catch (err) {
       setError(err.message);
     } finally { setLoading(false); }
@@ -89,7 +75,7 @@ function LoginForm({ onLogin }) {
         </div>
       )}
       {info && (
-        <div className="error-message" style={{ backgroundColor: 'rgba(109,40,217,0.2)', borderColor: 'var(--primary-color)', color: 'var(--text-primary)' }}>
+        <div className="error-message" style={{ backgroundColor: 'rgba(99,102,241,0.15)', borderColor: 'var(--primary-color)', color: 'var(--text-primary)' }}>
           {info}
         </div>
       )}
@@ -98,7 +84,7 @@ function LoginForm({ onLogin }) {
         <form onSubmit={handleRequestReset}>
           <h3 style={{ textAlign: 'center', marginTop: 0 }}>Reset Password</h3>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
-            Enter your email to receive a reset link.
+            Enter your email to receive a password reset link.
           </p>
           <div className="form-group">
             <label>Email Address</label>
@@ -109,7 +95,7 @@ function LoginForm({ onLogin }) {
             </div>
           </div>
           <button type="submit" className="btn" disabled={loading || !email}>
-            <Mail size={16} /> {loading ? 'Sending...' : 'Send Reset Link'}
+            <Mail size={16} /> {loading ? 'Sending…' : 'Send Reset Link'}
           </button>
           <button type="button" className="btn"
             style={{ marginTop: '0.5rem', backgroundColor: 'transparent', border: '1px solid var(--border-color)' }}
@@ -132,7 +118,7 @@ function LoginForm({ onLogin }) {
             <div style={{ position: 'relative' }}>
               <Key size={20} style={{ position: 'absolute', top: '12px', left: '12px', color: 'var(--text-secondary)' }} />
               <input id="password" type={showPw ? 'text' : 'password'}
-                placeholder="Secret password & encryption key"
+                placeholder="Your secret master password"
                 value={password} onChange={e => setPassword(e.target.value)}
                 style={{ paddingLeft: '2.5rem', paddingRight: '2.5rem' }} required />
               <button type="button" onClick={() => setShowPw(p => !p)}
@@ -140,16 +126,16 @@ function LoginForm({ onLogin }) {
                 {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+              This is also your encryption key — it is never stored or transmitted.
+            </p>
           </div>
           <button type="submit" className="btn" disabled={loading || !email || !password}>
-            <Unlock size={20} /> {loading ? 'Authenticating...' : 'Login / Signup'}
+            <Unlock size={20} /> {loading ? 'Authenticating…' : 'Login / Sign Up'}
           </button>
           <button type="button"
             onClick={() => { setResetStep('request'); clearMessages(); }}
-            style={{
-              width: '100%', marginTop: '0.75rem', background: 'none', border: 'none',
-              color: 'var(--primary-color)', cursor: 'pointer', fontSize: '0.85rem', textDecoration: 'underline'
-            }}>
+            style={{ width: '100%', marginTop: '0.75rem', background: 'none', border: 'none', color: 'var(--primary-color)', cursor: 'pointer', fontSize: '0.85rem', textDecoration: 'underline' }}>
             Forgot password?
           </button>
         </form>
@@ -158,10 +144,8 @@ function LoginForm({ onLogin }) {
   );
 }
 
-
-
 // ---------------------------------------------------------------------------
-// UserDashboard
+// UserDashboard — Supabase Database
 // ---------------------------------------------------------------------------
 function UserDashboard({ username, masterKey, onLogout }) {
   const [loading, setLoading] = useState(false);
@@ -181,7 +165,7 @@ function UserDashboard({ username, masterKey, onLogout }) {
         .single();
 
       if (fetchError) {
-        if (fetchError.code === 'PGRST116') { // No data found
+        if (fetchError.code === 'PGRST116') {
           setSavedPasswords({});
         } else {
           throw fetchError;
@@ -200,23 +184,15 @@ function UserDashboard({ username, masterKey, onLogout }) {
     } finally { setLoading(false); }
   };
 
-  useEffect(() => { if (username) fetchUserVault(); }, [username]);
+  useEffect(() => { fetchUserVault(); }, []);
 
   const saveToVault = async (passwords) => {
+    const { data: { user } } = await supabase.auth.getUser();
     const enc = {};
     Object.keys(passwords).forEach(app => { enc[app] = encryptPassword(passwords[app], masterKey); });
-
-    // Get user id from session
-    const { data: { user } } = await supabase.auth.getUser();
-
     const { error: upsertError } = await supabase
       .from('user_vaults')
-      .upsert({
-        user_id: user.id,
-        encrypted_data: enc,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'user_id' });
-
+      .upsert({ user_id: user.id, encrypted_data: enc, updated_at: new Date().toISOString() }, { onConflict: 'user_id' });
     if (upsertError) throw upsertError;
   };
 
@@ -224,9 +200,10 @@ function UserDashboard({ username, masterKey, onLogout }) {
 
   const handleSavePassword = async (e) => {
     e.preventDefault();
+    if (!newAppName.trim() || !newPassword.trim()) return;
     setLoading(true); setError('');
     try {
-      const updated = { ...savedPasswords, [newAppName]: newPassword };
+      const updated = { ...savedPasswords, [newAppName.trim()]: newPassword };
       await saveToVault(updated);
       setSavedPasswords(updated); setNewPassword(''); setNewAppName('');
     } catch (err) { setError(`Failed to save: ${err.message}`); }
@@ -258,7 +235,7 @@ function UserDashboard({ username, masterKey, onLogout }) {
     <div className="dashboard">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Database size={24} /> {username}&apos;s Vault
+          <Database size={24} /> My Vault
         </h2>
         <button onClick={onLogout} className="btn"
           style={{ width: 'auto', backgroundColor: 'transparent', border: '1px solid var(--border-color)' }}>
@@ -266,11 +243,18 @@ function UserDashboard({ username, masterKey, onLogout }) {
         </button>
       </div>
 
-      {error && <div className="error-message">{error}</div>}
+      <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+        Logged in as <strong>{username}</strong>
+      </p>
+
+      {error && <div className="error-message"><AlertCircle size={14} style={{ marginRight: 6 }} />{error}</div>}
+      {loading && <p style={{ color: 'var(--text-secondary)', textAlign: 'center' }}>Loading…</p>}
 
       <div className="secrets-list">
-        {Object.keys(savedPasswords).length === 0 ? (
-          <p style={{ color: 'var(--text-secondary)', textAlign: 'center' }}>No passwords saved yet.</p>
+        {Object.keys(savedPasswords).length === 0 && !loading ? (
+          <p style={{ color: 'var(--text-secondary)', textAlign: 'center' }}>
+            No passwords saved yet. Add one below!
+          </p>
         ) : (
           Object.keys(savedPasswords).map((app, idx) => {
             const isVisible = !!visiblePasswords[app];
@@ -281,15 +265,9 @@ function UserDashboard({ username, masterKey, onLogout }) {
                 {isEditing ? (
                   <input type="text" value={editingEntry.value} autoFocus
                     onChange={e => setEditingEntry({ app, value: e.target.value })}
-                    style={{
-                      flex: 1, background: 'var(--form-bg)', border: '1px solid var(--primary-color)',
-                      borderRadius: '6px', padding: '0.3rem 0.6rem', color: 'var(--text-primary)'
-                    }} />
+                    style={{ flex: 1, background: 'var(--form-bg)', border: '1px solid var(--primary-color)', borderRadius: '6px', padding: '0.3rem 0.6rem', color: 'var(--text-primary)' }} />
                 ) : (
-                  <span className="secret-item-value" style={{
-                    flex: 1,
-                    letterSpacing: isVisible ? 'normal' : '0.15em', fontFamily: isVisible ? 'inherit' : 'monospace'
-                  }}>
+                  <span className="secret-item-value" style={{ flex: 1, letterSpacing: isVisible ? 'normal' : '0.15em', fontFamily: isVisible ? 'inherit' : 'monospace' }}>
                     {isVisible ? savedPasswords[app] : '••••••••'}
                   </span>
                 )}
@@ -315,20 +293,22 @@ function UserDashboard({ username, masterKey, onLogout }) {
 
       <form onSubmit={handleSavePassword}
         style={{ marginTop: '1rem', padding: '1.5rem', background: 'var(--form-bg)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-        <h3 style={{ marginTop: 0, marginBottom: '0.5rem' }}>Save a Password securely</h3>
+        <h3 style={{ marginTop: 0, marginBottom: '0.5rem' }}>Save a Password</h3>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-          E2E security
+          Passwords are encrypted end-to-end before being stored.
         </p>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <input type="text" placeholder="Application Name (e.g. GitHub)" value={newAppName} onChange={e => setNewAppName(e.target.value)} required />
+            <input type="text" placeholder="App Name (e.g. GitHub)" value={newAppName}
+              onChange={e => setNewAppName(e.target.value)} required />
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <input type="password" placeholder="Super Secret Password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required />
+            <input type="password" placeholder="Password" value={newPassword}
+              onChange={e => setNewPassword(e.target.value)} required />
           </div>
         </div>
         <button type="submit" className="btn" style={{ marginTop: '1rem' }} disabled={loading || !newPassword || !newAppName}>
-          <Lock size={16} /> Encrypt &amp; Save
+          <Lock size={16} /> Encrypt & Save
         </button>
       </form>
     </div>
@@ -336,72 +316,44 @@ function UserDashboard({ username, masterKey, onLogout }) {
 }
 
 // ---------------------------------------------------------------------------
-// AdminPanel — Delete User + Reset Credentials
+// AdminPanel — Supabase Auth-based user management
 // ---------------------------------------------------------------------------
 function AdminPanel({ onExit }) {
-  const [registryUsers, setRegistryUsers] = useState({});
+  const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
   const loadUsers = async () => {
     setLoading(true); setError(''); setMessage('');
-    try { setRegistryUsers(await fetchRegistry()); }
-    catch (err) { setError(`Failed to load users: ${err.message}`); }
-    finally { setLoading(false); }
+    try {
+      // List users from the user_vaults table (visible to admin via RLS)
+      const { data, error: fetchError } = await supabase
+        .from('user_vaults')
+        .select('user_id, updated_at');
+      if (fetchError) throw fetchError;
+      setUsers(data || []);
+    } catch (err) {
+      setError(`Failed to load users: ${err.message}`);
+    } finally { setLoading(false); }
   };
 
   useEffect(() => { loadUsers(); }, []);
 
-  // ---- Delete user: removes from registry + vault data --------------------
-  const handleDeleteUser = async (username) => {
-    const confirmed = window.confirm(
-      `⚠️ Delete user "${username}"?\n\nThis will permanently remove their account and all stored passwords. This action cannot be undone.`
-    );
-    if (!confirmed) return;
+  const handleDeleteUserVault = async (userId) => {
+    if (!window.confirm(`Delete all vault data for this user?\n\nThis will permanently remove their encrypted passwords. The user's account will remain active.`)) return;
     setLoading(true); setError(''); setMessage('');
     try {
-      const updated = { ...registryUsers };
-      delete updated[username];
-      await saveRegistry(updated);
-
-      // Also delete vault data (best-effort)
-      try {
-        await axios.delete(`${VAULT_URL}/v1/secret/metadata/users/${username}`,
-          { headers: { 'X-Vault-Token': VAULT_TOKEN } });
-      } catch { /* vault data may not exist */ }
-
-      setMessage(`✅ User "${username}" has been deleted.`);
+      const { error: delError } = await supabase
+        .from('user_vaults')
+        .delete()
+        .eq('user_id', userId);
+      if (delError) throw delError;
+      setMessage('✅ Vault data deleted. The user account still exists in auth.');
       await loadUsers();
-    } catch (err) { setError(`Failed to delete user: ${err.message}`); }
+    } catch (err) { setError(`Failed to delete vault: ${err.message}`); }
     finally { setLoading(false); }
   };
-
-  // ---- Reset credentials: generate code + email ---------------------------
-  const handleResetCredentials = async (username) => {
-    const user = registryUsers[username];
-    if (!user?.email) { setError(`No email found for "${username}".`); return; }
-
-    const confirmed = window.confirm(
-      `Reset credentials for "${username}"?\n\nA reset code will be sent to ${user.email}.\nThe user must use this code to set a new password.`
-    );
-    if (!confirmed) return;
-    setLoading(true); setError(''); setMessage('');
-    try {
-      const code = generateCode();
-      const expiry = Date.now() + 15 * 60 * 1000;
-      const tokens = await fetchResetTokens();
-      tokens[username] = { code, expiry };
-      await saveResetTokens(tokens);
-
-      await axios.post(`${EMAIL_URL}/send-reset`, { to: user.email, username, code, type: 'admin' });
-      setMessage(`✅ Reset code sent to ${user.email}. They can now log in and use "Forgot password?" to set a new one.`);
-    } catch (err) {
-      setError(`Failed to send reset: ${err.response?.data?.error || err.message}`);
-    } finally { setLoading(false); }
-  };
-
-  const userList = Object.entries(registryUsers);
 
   return (
     <div className="dashboard">
@@ -411,61 +363,39 @@ function AdminPanel({ onExit }) {
         </h2>
         <button onClick={onExit} className="btn"
           style={{ width: 'auto', backgroundColor: 'transparent', border: '1px solid var(--border-color)' }}>
-          Exit Admin
+          ← My Vault
         </button>
       </div>
 
       {error && <div className="error-message"><AlertCircle size={14} style={{ marginRight: 6 }} />{error}</div>}
-      {message && <div className="error-message" style={{ backgroundColor: 'rgba(109,40,217,0.15)', borderColor: 'var(--primary-color)', color: 'var(--text-primary)' }}>{message}</div>}
+      {message && <div className="error-message" style={{ backgroundColor: 'rgba(99,102,241,0.15)', borderColor: 'var(--primary-color)', color: 'var(--text-primary)' }}>{message}</div>}
 
       <div className="secrets-list">
         {loading ? (
           <p style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>Loading users…</p>
-        ) : userList.length === 0 ? (
-          <p style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No users found.</p>
+        ) : users.length === 0 ? (
+          <p style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>No vault users found.</p>
         ) : (
-          userList.map(([uname, info]) => (
-            <div key={uname} className="secret-item" style={{ alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+          users.map((u) => (
+            <div key={u.user_id} className="secret-item" style={{ alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1 }}>
                 <Users size={16} />
-                <span className="secret-item-key">{uname}</span>
-                <span style={{
-                  fontSize: '0.7rem', padding: '2px 8px', borderRadius: '12px',
-                  backgroundColor: info.role === 'admin' ? 'var(--error-color)' : 'var(--primary-color)',
-                  color: 'white', opacity: 0.85
-                }}>
-                  {info.role}
+                <span className="secret-item-key" style={{ fontSize: '0.8rem' }}>{u.user_id.substring(0, 18)}…</span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                  Last active: {new Date(u.updated_at).toLocaleDateString()}
                 </span>
-                {info.email && (
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{info.email}</span>
-                )}
               </div>
-              <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
-                {/* Reset Credentials */}
-                <button onClick={() => handleResetCredentials(uname)} className="btn"
-                  style={{
-                    width: 'auto', padding: '0.4rem 0.8rem', backgroundColor: 'transparent',
-                    border: '1px solid var(--primary-color)', color: 'var(--primary-color)', fontSize: '0.8rem'
-                  }}
-                  title={`Send password reset email to ${info.email}`}>
-                  <Mail size={14} /> Reset Credentials
-                </button>
-                {/* Delete User */}
-                <button onClick={() => handleDeleteUser(uname)} className="btn"
-                  style={{
-                    width: 'auto', padding: '0.4rem 0.8rem', backgroundColor: 'transparent',
-                    border: '1px solid var(--error-color)', color: 'var(--error-color)', fontSize: '0.8rem'
-                  }}
-                  title={`Permanently delete user "${uname}"`}>
-                  <Trash2 size={14} /> Delete User
-                </button>
-              </div>
+              <button onClick={() => handleDeleteUserVault(u.user_id)} className="btn"
+                style={{ width: 'auto', padding: '0.4rem 0.8rem', backgroundColor: 'transparent', border: '1px solid var(--error-color)', color: 'var(--error-color)', fontSize: '0.8rem' }}
+                title="Delete this user's vault data">
+                <Trash2 size={14} /> Clear Vault
+              </button>
             </div>
           ))
         )}
       </div>
       <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', textAlign: 'center', marginTop: '1rem' }}>
-        Admin has zero-visibility into user passwords.
+        ⚠️ Admins have zero-visibility into user passwords. Only encrypted blobs are stored.
       </p>
     </div>
   );
@@ -475,57 +405,49 @@ function AdminPanel({ onExit }) {
 // MainApp
 // ---------------------------------------------------------------------------
 function MainApp() {
-  const [currentUser, setCurrentUser] = useState(() => sessionStorage.getItem('vault_user'));
-  const [masterKey, setMasterKey] = useState(() => sessionStorage.getItem('vault_key'));
-  const [userId, setUserId] = useState(() => sessionStorage.getItem('vault_uid'));
-  const [role, setRole] = useState(() => sessionStorage.getItem('vault_role') || 'user');
+  const [currentUser, setCurrentUser] = useState(null);
+  const [masterKey, setMasterKey] = useState(null);
+  const [role, setRole] = useState('user');
   const [showAdmin, setShowAdmin] = useState(false);
   const [theme, setTheme] = useState(() => localStorage.getItem('vault_theme') || 'dark');
+  const [sessionLoaded, setSessionLoaded] = useState(false);
 
   useEffect(() => {
     document.body.classList.toggle('light', theme === 'light');
     localStorage.setItem('vault_theme', theme);
   }, [theme]);
 
-  // Check for active session on load
+  // Restore session on load
   useEffect(() => {
-    const checkSession = async () => {
+    const restore = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
-        setCurrentUser(session.user.email);
-        setUserId(session.user.id);
-        // Admin check: you can hardcode your admin email here for now
-        if (session.user.email === 'admin@vault.test' || session.user.email.startsWith('admin@')) {
-          setRole('admin');
-          sessionStorage.setItem('vault_role', 'admin');
-        }
+        const email = session.user.email;
+        setCurrentUser(email);
+        // masterKey cannot be restored from session (zero-knowledge) — user must re-enter it
+        const isAdmin = email.startsWith('admin@') || email === import.meta.env.VITE_ADMIN_EMAIL;
+        setRole(isAdmin ? 'admin' : 'user');
       }
+      setSessionLoaded(true);
     };
-    checkSession();
+    restore();
   }, []);
 
   const handleLogin = (email, key, uid) => {
-    setCurrentUser(email); setMasterKey(key); setUserId(uid);
-    sessionStorage.setItem('vault_user', email);
-    sessionStorage.setItem('vault_key', key);
-    sessionStorage.setItem('vault_uid', uid);
-
-    if (email === 'admin@vault.test' || email.startsWith('admin@')) {
-      setRole('admin');
-      sessionStorage.setItem('vault_role', 'admin');
-    } else {
-      setRole('user');
-      sessionStorage.setItem('vault_role', 'user');
-    }
+    setCurrentUser(email);
+    setMasterKey(key);
+    const isAdmin = email.startsWith('admin@') || email === import.meta.env.VITE_ADMIN_EMAIL;
+    setRole(isAdmin ? 'admin' : 'user');
   };
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
-    setCurrentUser(null); setMasterKey(null); setUserId(null); setRole('user');
-    sessionStorage.clear();
+    setCurrentUser(null); setMasterKey(null); setRole('user'); setShowAdmin(false);
   };
 
   const isAdmin = role === 'admin';
+
+  if (!sessionLoaded) return null; // Avoids flash of login screen on session restore
 
   return (
     <div className="app-container">
@@ -538,10 +460,8 @@ function MainApp() {
         <div style={{
           width: '64px', height: '64px', background: 'linear-gradient(135deg, #6d28d9, #4f46e5)',
           borderRadius: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '32px', fontWeight: 'bold', color: 'white', marginBottom: '1rem', margin: '0 auto'
-        }}>
-          V
-        </div>
+          fontSize: '32px', fontWeight: 'bold', color: 'white', margin: '0 auto 1rem'
+        }}>V</div>
         <h1>Vaultex</h1>
         <p>E2E Encrypted Vault</p>
 
@@ -570,6 +490,17 @@ function MainApp() {
 
       {!currentUser ? (
         <LoginForm onLogin={handleLogin} />
+      ) : !masterKey ? (
+        // If session was restored but masterKey not set, prompt re-entry
+        <div style={{ textAlign: 'center', padding: '1rem' }}>
+          <p>Welcome back, <strong>{currentUser}</strong>!</p>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            Please log in again to decrypt your vault. Your master password is never stored.
+          </p>
+          <button className="btn" onClick={handleLogout} style={{ width: 'auto' }}>
+            <LogOut size={16} /> Log out & re-enter
+          </button>
+        </div>
       ) : showAdmin && isAdmin ? (
         <AdminPanel onExit={() => setShowAdmin(false)} />
       ) : (
