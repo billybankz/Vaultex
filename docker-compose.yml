@@ -1,0 +1,21 @@
+services:
+  vault:
+    image: hashicorp/vault:latest
+    container_name: internal-vault-backend
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: "admin-master-token"
+      VAULT_ADDR: "http://0.0.0.0:8200"
+    cap_add:
+      - IPC_LOCK
+    restart: always
+
+  email-service:
+    build: ./email-service
+    container_name: internal-vault-email
+    ports:
+      - "3001:3001"
+    env_file:
+      - ./email-service/.env
+    restart: always

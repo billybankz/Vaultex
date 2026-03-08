@@ -1,0 +1,14 @@
+{
+    "version": 2,
+    "rewrites": [
+        {
+            "source": "/vault-api/(.*)",
+            "destination": "https://your-koyeb-vault-url.koyeb.app/$1"
+        },
+        {
+            "source": "/email-api/send-reset",
+            "destination": "/api/send-reset"
+        }
+    ],
+    "framework": "vite"
+}
