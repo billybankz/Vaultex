@@ -534,10 +534,10 @@ function AdminPanel({ onExit, toast }) {
   const loadUsers = useCallback(async () => {
     setLoading(true);
     try {
-      // 1. Fetch profiles for real emails and lockout statuses
+      // 1. Fetch profiles for real emails and lockout statuses PLUS role
       const { data: profilesData, error: profError } = await supabase
         .from('profiles')
-        .select('id, email, is_locked, failed_attempts, updated_at');
+        .select('id, email, role, is_locked, failed_attempts, updated_at');
 
       if (profError) throw profError;
       setUsers(profilesData || []);
@@ -590,6 +590,18 @@ function AdminPanel({ onExit, toast }) {
     finally { setLoading(false); }
   };
 
+  const handleToggleRole = async (userId, currentRole) => {
+    setLoading(true);
+    const newRole = currentRole === 'admin' ? 'user' : 'admin';
+    try {
+      const { error } = await supabase.rpc('admin_set_role', { target_user_id: userId, new_role: newRole });
+      if (error) throw error;
+      toast(`User role updated to ${newRole}`, 'success');
+      await loadUsers();
+    } catch (err) { toast(`Role update failed: ${err.message}`, 'error'); }
+    finally { setLoading(false); }
+  };
+
   const filteredUsers = users.filter(u =>
     u.email?.toLowerCase().includes(search.toLowerCase()) ||
     u.id.includes(search)
@@ -626,8 +638,9 @@ function AdminPanel({ onExit, toast }) {
                 {u.is_locked ? <Lock size={16} color="#fff" /> : <Users size={16} color="#fff" />}
               </div>
               <div>
-                <div className="admin-user-email" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <div className="admin-user-email" style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                   {u.email || u.id}
+                  {u.role === 'admin' && <span className="cat-badge cat-work" style={{ background: 'var(--primary)', color: '#fff' }}>ADMIN</span>}
                   {u.is_locked && <span className="cat-badge cat-other" style={{ background: 'var(--error-bg)', color: 'var(--error)' }}>LOCKED OUT ({u.failed_attempts} fails)</span>}
                 </div>
                 <div className="admin-user-meta">
@@ -656,6 +669,13 @@ function AdminPanel({ onExit, toast }) {
                     : <><Mail size={13} /> Reset Pw</>}
                 </button>
               )}
+              <button
+                className="btn"
+                style={{ width: 'auto', padding: '0.4rem 0.8rem', fontSize: '0.8rem', background: 'var(--bg-card)', color: 'var(--text)', border: '1px solid var(--border)' }}
+                onClick={() => handleToggleRole(u.id, u.role)}
+                title={u.role === 'admin' ? "Demote to User" : "Promote to Admin"}>
+                <Shield size={13} /> {u.role === 'admin' ? "Demote" : "Make Admin"}
+              </button>
               <button
                 className="btn danger"
                 style={{ width: 'auto', padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
@@ -747,19 +767,29 @@ function MainApp() {
       if (session) {
         const email = session.user.email;
         setCurrentUser(email);
-        const isAdmin = email.startsWith('admin@') || email === import.meta.env.VITE_ADMIN_EMAIL;
-        setRole(isAdmin ? 'admin' : 'user');
+
+        // Fetch role from DB
+        const { data: profile } = await supabase.from('profiles').select('role').eq('id', session.user.id).single();
+        const dbRole = profile?.role || 'user';
+        const isHardcodedAdmin = email.startsWith('admin@') || email === import.meta.env.VITE_ADMIN_EMAIL;
+
+        setRole(dbRole === 'admin' || isHardcodedAdmin ? 'admin' : 'user');
       }
       setSessionLoaded(true);
     };
     restore();
   }, []);
 
-  const handleLogin = (email, key) => {
+  const handleLogin = async (email, key) => {
     setCurrentUser(email);
     setMasterKey(key);
-    const isAdmin = email.startsWith('admin@') || email === import.meta.env.VITE_ADMIN_EMAIL;
-    setRole(isAdmin ? 'admin' : 'user');
+
+    // Fetch role from DB
+    const { data: profile } = await supabase.from('profiles').select('role').eq('email', email).single();
+    const dbRole = profile?.role || 'user';
+    const isHardcodedAdmin = email.startsWith('admin@') || email === import.meta.env.VITE_ADMIN_EMAIL;
+
+    setRole(dbRole === 'admin' || isHardcodedAdmin ? 'admin' : 'user');
   };
 
   const handleLogout = async () => {
