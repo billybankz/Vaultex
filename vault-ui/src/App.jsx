@@ -547,14 +547,15 @@ function AdminPanel({ onExit, toast }) {
 
   useEffect(() => { loadUsers(); }, [loadUsers]);
 
-  const handleClearVault = async (userId) => {
-    if (!window.confirm('Delete all vault data for this user?\n\nTheir account will remain active. They will see an empty vault upon next login.')) return;
+  const handleDeleteUser = async (userId) => {
+    if (!window.confirm('Delete this user entirely?\n\nThis will remove their account, lockouts, and wipe their entire vault. This action cannot be undone.')) return;
     setLoading(true);
     try {
-      const { error } = await supabase.from('user_vaults').delete().eq('user_id', userId);
+      const { error } = await supabase.rpc('admin_delete_user', { target_user_id: userId });
       if (error) throw error;
-      toast('Vault data cleared. Account still active.', 'success');
-    } catch (err) { toast(`Failed to clear vault: ${err.message}`, 'error'); }
+      toast('User successfully deleted!', 'success');
+      await loadUsers(); // Refresh the list
+    } catch (err) { toast(`Failed to delete user: ${err.message}`, 'error'); }
     finally { setLoading(false); }
   };
 
@@ -658,9 +659,9 @@ function AdminPanel({ onExit, toast }) {
               <button
                 className="btn danger"
                 style={{ width: 'auto', padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
-                onClick={() => handleClearVault(u.id)}
-                title="Wipe vault data">
-                <Trash2 size={13} /> Wipe Vault
+                onClick={() => handleDeleteUser(u.id)}
+                title="Permanently delete user account">
+                <Trash2 size={13} /> Delete User
               </button>
             </div>
           </div>
