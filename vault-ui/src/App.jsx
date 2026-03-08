@@ -92,9 +92,21 @@ function LoginForm({ onLogin }) {
     e.preventDefault(); clear();
     if (!email || !password) return;
     setLoading(true);
+
     try {
+      // 1. Check if locked out (before hitting auth APIs)
+      const { data: isLocked, error: lockErr } = await supabase.rpc('check_is_locked', { user_email: email });
+      if (lockErr) console.warn("Could not check lockout status", lockErr);
+      if (isLocked) {
+        throw new Error('This account has been locked due to too many failed login attempts. Contact your administrator.');
+      }
+
       const { data: si, error: sie } = await supabase.auth.signInWithPassword({ email, password });
+
       if (sie) {
+        // Log a failed attempt
+        await supabase.rpc('record_failed_login', { user_email: email });
+
         if (sie.message.toLowerCase().includes('invalid login credentials')) {
           const { data: su, error: sue } = await supabase.auth.signUp({ email, password });
           if (sue) throw sue;
@@ -106,6 +118,8 @@ function LoginForm({ onLogin }) {
           }
         } else throw sie;
       } else {
+        // Success: reset attempts counter
+        await supabase.rpc('reset_failed_login', { user_email: email });
         onLogin(si.user.email, password, si.user.id);
       }
     } catch (err) { setError(err.message || 'Authentication failed.'); }
@@ -503,18 +517,18 @@ function AdminPanel({ onExit, toast }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(null); // userId being sent reset
+  const [search, setSearch] = useState('');
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('user_vaults')
-        .select('user_id, updated_at');
-      if (error) throw error;
+      // 1. Fetch profiles for real emails and lockout statuses
+      const { data: profilesData, error: profError } = await supabase
+        .from('profiles')
+        .select('id, email, is_locked, failed_attempts, updated_at');
 
-      // Try to get email from auth.users via RPC (if available), else show ID
-      // We'll attempt a profile lookup via the user_id
-      setUsers(data || []);
+      if (profError) throw profError;
+      setUsers(profilesData || []);
     } catch (err) { toast(`Failed to load users: ${err.message}`, 'error'); }
     finally { setLoading(false); }
   }, [toast]);
@@ -522,33 +536,41 @@ function AdminPanel({ onExit, toast }) {
   useEffect(() => { loadUsers(); }, [loadUsers]);
 
   const handleClearVault = async (userId) => {
-    if (!window.confirm('Delete all vault data for this user?\n\nTheir account will remain active.')) return;
+    if (!window.confirm('Delete all vault data for this user?\n\nTheir account will remain active. They will see an empty vault upon next login.')) return;
     setLoading(true);
     try {
       const { error } = await supabase.from('user_vaults').delete().eq('user_id', userId);
       if (error) throw error;
       toast('Vault data cleared. Account still active.', 'success');
-      await loadUsers();
     } catch (err) { toast(`Failed to clear vault: ${err.message}`, 'error'); }
     finally { setLoading(false); }
   };
 
-  const handleSendReset = async (userId) => {
-    const email = prompt('Enter user email to send reset code:');
-    if (!email) return;
+  const handleSendReset = async (email, userId) => {
     setSending(userId);
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
     try {
-      const res = await fetch('/.netlify/functions/send-reset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: email, username: email.split('@')[0], code, type: 'admin' })
-      });
-      if (!res.ok) throw new Error(await res.text());
-      toast(`Reset code sent to ${email}!`, 'success');
+      const { error } = await supabase.auth.resetPasswordForEmail(email);
+      if (error) throw error;
+      toast(`Native Reset code sent to ${email}!`, 'success');
     } catch (err) { toast(`Email failed: ${err.message}`, 'error'); }
     finally { setSending(null); }
   };
+
+  const handleUnlock = async (userId, email) => {
+    setLoading(true);
+    try {
+      const { error } = await supabase.rpc('admin_unlock_user', { target_user_id: userId });
+      if (error) throw error;
+      toast(`User ${email} unlocked successfully.`, 'success');
+      await loadUsers();
+    } catch (err) { toast(`Unlock failed: ${err.message}`, 'error'); }
+    finally { setLoading(false); }
+  };
+
+  const filteredUsers = users.filter(u =>
+    u.email?.toLowerCase().includes(search.toLowerCase()) ||
+    u.id.includes(search)
+  );
 
   return (
     <div className="dashboard">
@@ -561,43 +583,62 @@ function AdminPanel({ onExit, toast }) {
         </button>
       </div>
 
+      <div className="toolbar" style={{ marginBottom: '1rem' }}>
+        <div className="search-wrap">
+          <Search size={15} className="search-icon" />
+          <input placeholder="Search users by email…"
+            value={search} onChange={e => setSearch(e.target.value)} />
+        </div>
+      </div>
+
       <div className="vault-list">
         {loading ? (
           <div className="vault-empty"><div className="spinner" /></div>
-        ) : users.length === 0 ? (
-          <div className="vault-empty">No vault users found.</div>
-        ) : users.map(u => (
-          <div key={u.user_id} className="admin-user-item">
+        ) : filteredUsers.length === 0 ? (
+          <div className="vault-empty">No users found.</div>
+        ) : filteredUsers.map(u => (
+          <div key={u.id} className="admin-user-item">
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <div className="vault-item-icon" style={{ background: 'linear-gradient(135deg,#7f1d1d,#dc2626)' }}>
-                <Users size={16} color="#fff" />
+              <div className="vault-item-icon" style={{ background: u.is_locked ? '#7f1d1d' : 'linear-gradient(135deg,#7f1d1d,#dc2626)' }}>
+                {u.is_locked ? <Lock size={16} color="#fff" /> : <Users size={16} color="#fff" />}
               </div>
               <div>
-                <div className="admin-user-email" style={{ fontFamily: 'monospace', fontSize: '0.78rem' }}>
-                  {u.user_id}
+                <div className="admin-user-email" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  {u.email || u.id}
+                  {u.is_locked && <span className="cat-badge cat-other" style={{ background: 'var(--error-bg)', color: 'var(--error)' }}>LOCKED OUT ({u.failed_attempts} fails)</span>}
                 </div>
                 <div className="admin-user-meta">
-                  Last active: {new Date(u.updated_at).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  Last updated/active: {new Date(u.updated_at).toLocaleDateString()}
                 </div>
               </div>
             </div>
             <div className="admin-actions">
-              <button
-                className="btn"
-                style={{ width: 'auto', padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
-                disabled={sending === u.user_id}
-                onClick={() => handleSendReset(u.user_id)}
-                title="Send password reset email">
-                {sending === u.user_id
-                  ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Sending…</>
-                  : <><Mail size={13} /> Send Reset</>}
-              </button>
+              {u.is_locked ? (
+                <button
+                  className="btn"
+                  style={{ width: 'auto', padding: '0.4rem 0.8rem', fontSize: '0.8rem', background: 'var(--success)' }}
+                  onClick={() => handleUnlock(u.id, u.email)}
+                  title="Unlock User">
+                  <Unlock size={13} /> Unlock User
+                </button>
+              ) : (
+                <button
+                  className="btn"
+                  style={{ width: 'auto', padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                  disabled={sending === u.id || !u.email}
+                  onClick={() => handleSendReset(u.email, u.id)}
+                  title="Send native password reset email">
+                  {sending === u.id
+                    ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Sending…</>
+                    : <><Mail size={13} /> Reset Pw</>}
+                </button>
+              )}
               <button
                 className="btn danger"
                 style={{ width: 'auto', padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
-                onClick={() => handleClearVault(u.user_id)}
-                title="Clear vault data">
-                <Trash2 size={13} /> Clear Vault
+                onClick={() => handleClearVault(u.id)}
+                title="Wipe vault data">
+                <Trash2 size={13} /> Wipe Vault
               </button>
             </div>
           </div>
