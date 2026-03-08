@@ -6,12 +6,6 @@
   directory = "netlify/functions"
 
 [[redirects]]
-  from = "/vault-api/*"
-  to = "https://your-koyeb-vault-url.koyeb.app/:splat"
-  status = 200
-  force = true
-
-[[redirects]]
   from = "/email-api/send-reset"
   to = "/.netlify/functions/send-reset"
   status = 200
