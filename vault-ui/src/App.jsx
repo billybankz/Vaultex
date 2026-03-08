@@ -131,9 +131,19 @@ function LoginForm({ onLogin }) {
     if (!email) return;
     setLoading(true);
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email);
-      if (error) throw error;
-      setInfo(`Reset code sent to ${email}. Check your inbox.`);
+      // 1. Generate a custom code from Postgres
+      const { data: code, error: rpcErr } = await supabase.rpc('generate_custom_otp', { user_email: email });
+      if (rpcErr) throw rpcErr;
+
+      // 2. Dispatch email to Resend Netlify Function!
+      const res = await fetch('/.netlify/functions/send-reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: email, username: email.split('@')[0], code, type: 'self' })
+      });
+      if (!res.ok) throw new Error(await res.text());
+
+      setInfo(`Recovery code sent via Resend to ${email}. Check your inbox.`);
       setResetMode('verify');
     } catch (err) { setError(err.message); }
     finally { setLoading(false); }
@@ -144,22 +154,18 @@ function LoginForm({ onLogin }) {
     if (!email || !otpCode || !newPassword) return;
     setLoading(true);
     try {
-      // 1. Verify OTP code
-      const { data, error: verifyError } = await supabase.auth.verifyOtp({
-        email,
-        token: otpCode,
-        type: 'recovery'
+      // Very custom OTP code and forcefully update native password
+      const { data, error: verifyError } = await supabase.rpc('verify_and_update_password', {
+        user_email: email,
+        check_otp: otpCode,
+        new_password: newPassword
       });
+
       if (verifyError) throw verifyError;
 
-      // 2. Update the user's password now that they are verified/logged in
-      const { error: updateError } = await supabase.auth.updateUser({
-        password: newPassword
-      });
-      if (updateError) throw updateError;
-
-      setInfo('Password successfully reset! Logging you in...');
-      onLogin(data.user.email, newPassword, data.user.id);
+      setInfo('Password successfully updated via Custom Flow! Logging you in...');
+      onLogin(email, newPassword, 'unknown-id'); // We bypass getting ID since login forces refresh
+      window.location.reload(); // Refresh to securely establish new session
     } catch (err) { setError(err.message); }
     finally { setLoading(false); }
   };
@@ -549,9 +555,19 @@ function AdminPanel({ onExit, toast }) {
   const handleSendReset = async (email, userId) => {
     setSending(userId);
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email);
-      if (error) throw error;
-      toast(`Native Reset code sent to ${email}!`, 'success');
+      // 1. Generate custom code
+      const { data: code, error: rpcErr } = await supabase.rpc('generate_custom_otp', { user_email: email });
+      if (rpcErr) throw rpcErr;
+
+      // 2. Dispatch email to Resend
+      const res = await fetch('/.netlify/functions/send-reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: email, username: email.split('@')[0], code, type: 'admin' })
+      });
+      if (!res.ok) throw new Error(await res.text());
+
+      toast(`Resend OTP sent to ${email}!`, 'success');
     } catch (err) { toast(`Email failed: ${err.message}`, 'error'); }
     finally { setSending(null); }
   };
